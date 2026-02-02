@@ -1,0 +1,33 @@
+server:
+  host: "0.0.0.0"
+  port: 50051
+  shutdown_timeout: 10s
+
+spot_service:
+  addr: "spot-service:50052"
+  timeout: 5s
+  enable_breaker: true
+  breaker:
+    max_requests: 3
+    interval: 10s
+    timeout: 30s
+
+rate_limit:
+  enabled: true
+  requests_per_second: 10
+  burst: 20
+  methods:
+    CreateOrder:
+      requests_per_second: 10.0
+      burst: 20
+    GetOrderStatus:
+      requests_per_second: 50.0
+      burst: 100
+
+health:
+  enabled: true
+
+logger:
+  level: "info"
+  development: false
+  encoding: "json"

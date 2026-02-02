@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package order.v1;
+
+option go_package = "order-service/gen/pb/v1;orderv1";
+
+service OrderService {
+  rpc GetOrderStatus(GetOrderStatusRequest) returns (GetOrderStatusResponse);
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+}
+
+message GetOrderStatusRequest {
+  string order_id = 1;
+  string user_id = 2;
+}
+
+message GetOrderStatusResponse {
+  string order_id = 1;
+  OrderStatus status = 2;
+}
+
+message CreateOrderRequest {
+  string user_id = 1;
+  string market_id = 2;
+  OrderType order_type = 3;
+  string price = 4;
+  string quantity = 5;
+}
+
+message CreateOrderResponse {
+  string order_id = 1;
+  OrderStatus status = 2;
+}
+
+enum OrderType {
+  ORDER_TYPE_UNSPECIFIED = 0;
+  ORDER_TYPE_LIMIT = 1;
+  ORDER_TYPE_MARKET = 2;
+  ORDER_TYPE_STOP_LIMIT = 3;
+  ORDER_TYPE_STOP_MARKET = 4;
+}
+
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  ORDER_STATUS_CREATED = 1;   // принят, но ещё не в стакане
+  ORDER_STATUS_OPEN = 2;      // активен в стакане
+  ORDER_STATUS_FILLED = 3;    // полностью исполнен
+  ORDER_STATUS_CANCELLED = 4; // отменен
+  ORDER_STATUS_REJECTED = 5;  // отклонен (ошибка при создании)
+}
