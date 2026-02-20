@@ -3,18 +3,18 @@ package clients
 import (
 	"context"
 	"fmt"
-	"github.com/chilly266futon/spotService/pkg/shared/interceptors"
 	"time"
 
 	"go.uber.org/zap"
 
-	spotv1 "github.com/chilly266futon/spotService/gen/pb"
+	spotpb "github.com/chilly266futon/exchange-service-contracts/gen/pb/spot"
 	"github.com/chilly266futon/spotService/pkg/shared/breaker"
+	"github.com/chilly266futon/spotService/pkg/shared/interceptors"
 	"github.com/chilly266futon/spotService/pkg/spotclient"
 )
 
 type SpotClient interface {
-	MarketExists(ctx context.Context, marketID string, userRoles []spotv1.UserRole) (bool, error)
+	MarketExists(ctx context.Context, marketID string, userRoles []spotpb.UserRole) (bool, error)
 	Close() error
 }
 
@@ -53,7 +53,7 @@ func NewSpotClient(cfg Config, logger *zap.Logger) (SpotClient, error) {
 	return impl, nil
 }
 
-func (c *spotClientImpl) MarketExists(ctx context.Context, marketID string, userRoles []spotv1.UserRole) (bool, error) {
+func (c *spotClientImpl) MarketExists(ctx context.Context, marketID string, userRoles []spotpb.UserRole) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 

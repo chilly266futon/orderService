@@ -11,9 +11,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	orderv1 "github.com/chilly266futon/orderService/gen/pb"
+	orderpb "github.com/chilly266futon/exchange-service-contracts/gen/pb/order"
+	spotpb "github.com/chilly266futon/exchange-service-contracts/gen/pb/spot"
 	"github.com/chilly266futon/orderService/internal/storage"
-	spotv1 "github.com/chilly266futon/spotService/gen/pb"
 )
 
 type fakeSpotClient struct {
@@ -21,7 +21,7 @@ type fakeSpotClient struct {
 	err             error
 }
 
-func (f *fakeSpotClient) MarketExists(ctx context.Context, marketID string, userRoles []spotv1.UserRole) (bool, error) {
+func (f *fakeSpotClient) MarketExists(ctx context.Context, marketID string, userRoles []spotpb.UserRole) (bool, error) {
 	if f.err != nil {
 		return false, f.err
 	}
@@ -44,17 +44,17 @@ func TestCreateOrder_Success(t *testing.T) {
 
 	svc := newTestService(spotClient)
 
-	resp, err := svc.CreateOrder(context.Background(), &orderv1.CreateOrderRequest{
+	resp, err := svc.CreateOrder(context.Background(), &orderpb.CreateOrderRequest{
 		UserId:    "user-1",
 		MarketId:  "BTC-USDT",
-		OrderType: orderv1.OrderType_ORDER_TYPE_LIMIT,
+		OrderType: orderpb.OrderType_ORDER_TYPE_LIMIT,
 		Price:     "50000.00",
 		Quantity:  "1.5",
 	})
 
 	require.NoError(t, err)
 	assert.NotEmpty(t, resp.OrderId)
-	assert.Equal(t, orderv1.OrderStatus_ORDER_STATUS_CREATED, resp.Status)
+	assert.Equal(t, orderpb.OrderStatus_ORDER_STATUS_CREATED, resp.Status)
 }
 
 func TestCreateOrder_MarketNotFound(t *testing.T) {
@@ -64,10 +64,10 @@ func TestCreateOrder_MarketNotFound(t *testing.T) {
 
 	svc := newTestService(spotClient)
 
-	_, err := svc.CreateOrder(context.Background(), &orderv1.CreateOrderRequest{
+	_, err := svc.CreateOrder(context.Background(), &orderpb.CreateOrderRequest{
 		UserId:    "user-1",
 		MarketId:  "ETH-USDT",
-		OrderType: orderv1.OrderType_ORDER_TYPE_LIMIT,
+		OrderType: orderpb.OrderType_ORDER_TYPE_LIMIT,
 		Price:     "3000.00",
 		Quantity:  "10",
 	})
@@ -86,10 +86,10 @@ func TestCreateOrder_SpotServiceError(t *testing.T) {
 
 	svc := newTestService(spotClient)
 
-	_, err := svc.CreateOrder(context.Background(), &orderv1.CreateOrderRequest{
+	_, err := svc.CreateOrder(context.Background(), &orderpb.CreateOrderRequest{
 		UserId:    "user-1",
 		MarketId:  "BTC-USDT",
-		OrderType: orderv1.OrderType_ORDER_TYPE_LIMIT,
+		OrderType: orderpb.OrderType_ORDER_TYPE_LIMIT,
 		Price:     "50000",
 		Quantity:  "1",
 	})
@@ -110,33 +110,33 @@ func TestCreateOrder_InvalidArguments(t *testing.T) {
 
 	tests := []struct {
 		name string
-		req  *orderv1.CreateOrderRequest
+		req  *orderpb.CreateOrderRequest
 	}{
 		{
 			name: "empty user_id",
-			req: &orderv1.CreateOrderRequest{
+			req: &orderpb.CreateOrderRequest{
 				MarketId:  "BTC",
-				OrderType: orderv1.OrderType_ORDER_TYPE_LIMIT,
+				OrderType: orderpb.OrderType_ORDER_TYPE_LIMIT,
 				Price:     "1",
 				Quantity:  "1",
 			},
 		},
 		{
 			name: "price <= 0",
-			req: &orderv1.CreateOrderRequest{
+			req: &orderpb.CreateOrderRequest{
 				UserId:    "u",
 				MarketId:  "BTC",
-				OrderType: orderv1.OrderType_ORDER_TYPE_LIMIT,
+				OrderType: orderpb.OrderType_ORDER_TYPE_LIMIT,
 				Price:     "0",
 				Quantity:  "1",
 			},
 		},
 		{
 			name: "invalid price format",
-			req: &orderv1.CreateOrderRequest{
+			req: &orderpb.CreateOrderRequest{
 				UserId:    "u",
 				MarketId:  "BTC",
-				OrderType: orderv1.OrderType_ORDER_TYPE_LIMIT,
+				OrderType: orderpb.OrderType_ORDER_TYPE_LIMIT,
 				Price:     "invalid",
 				Quantity:  "1",
 			},
@@ -161,22 +161,22 @@ func TestGetOrderStatus_Success(t *testing.T) {
 
 	svc := newTestService(spotClient)
 
-	createResp, err := svc.CreateOrder(context.Background(), &orderv1.CreateOrderRequest{
+	createResp, err := svc.CreateOrder(context.Background(), &orderpb.CreateOrderRequest{
 		UserId:    "user-1",
 		MarketId:  "BTC",
-		OrderType: orderv1.OrderType_ORDER_TYPE_LIMIT,
+		OrderType: orderpb.OrderType_ORDER_TYPE_LIMIT,
 		Price:     "10",
 		Quantity:  "1",
 	})
 	require.NoError(t, err)
 
-	resp, err := svc.GetOrderStatus(context.Background(), &orderv1.GetOrderStatusRequest{
+	resp, err := svc.GetOrderStatus(context.Background(), &orderpb.GetOrderStatusRequest{
 		OrderId: createResp.OrderId,
 		UserId:  "user-1",
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, orderv1.OrderStatus_ORDER_STATUS_CREATED, resp.Status)
+	assert.Equal(t, orderpb.OrderStatus_ORDER_STATUS_CREATED, resp.Status)
 }
 
 func TestGetOrderStatus_AccessDenied(t *testing.T) {
@@ -186,15 +186,15 @@ func TestGetOrderStatus_AccessDenied(t *testing.T) {
 
 	svc := newTestService(spotClient)
 
-	createResp, err := svc.CreateOrder(context.Background(), &orderv1.CreateOrderRequest{
+	createResp, err := svc.CreateOrder(context.Background(), &orderpb.CreateOrderRequest{
 		UserId:    "user-1",
 		MarketId:  "BTC",
-		OrderType: orderv1.OrderType_ORDER_TYPE_LIMIT,
+		OrderType: orderpb.OrderType_ORDER_TYPE_LIMIT,
 		Price:     "10",
 		Quantity:  "1",
 	})
 
-	_, err = svc.GetOrderStatus(context.Background(), &orderv1.GetOrderStatusRequest{
+	_, err = svc.GetOrderStatus(context.Background(), &orderpb.GetOrderStatusRequest{
 		OrderId: createResp.OrderId,
 		UserId:  "user-2",
 	})
@@ -209,7 +209,7 @@ func TestGetOrderStatus_NotFound(t *testing.T) {
 	spotClient := &fakeSpotClient{}
 	svc := newTestService(spotClient)
 
-	_, err := svc.GetOrderStatus(context.Background(), &orderv1.GetOrderStatusRequest{
+	_, err := svc.GetOrderStatus(context.Background(), &orderpb.GetOrderStatusRequest{
 		OrderId: "non-existent-order",
 		UserId:  "user-1",
 	})
@@ -226,7 +226,7 @@ func TestGetOrderStatus_InvalidArguments(t *testing.T) {
 
 	tests := []struct {
 		name string
-		req  *orderv1.GetOrderStatusRequest
+		req  *orderpb.GetOrderStatusRequest
 	}{
 		{
 			name: "nil request",
@@ -234,13 +234,13 @@ func TestGetOrderStatus_InvalidArguments(t *testing.T) {
 		},
 		{
 			name: "empty order_id",
-			req: &orderv1.GetOrderStatusRequest{
+			req: &orderpb.GetOrderStatusRequest{
 				UserId: "user-1",
 			},
 		},
 		{
 			name: "empty user_id",
-			req: &orderv1.GetOrderStatusRequest{
+			req: &orderpb.GetOrderStatusRequest{
 				OrderId: "order-1",
 			},
 		},
@@ -284,10 +284,10 @@ func TestCreateOrder_InvalidQuantitty(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := svc.CreateOrder(context.Background(), &orderv1.CreateOrderRequest{
+			_, err := svc.CreateOrder(context.Background(), &orderpb.CreateOrderRequest{
 				UserId:    "user-1",
 				MarketId:  "BTC",
-				OrderType: orderv1.OrderType_ORDER_TYPE_LIMIT,
+				OrderType: orderpb.OrderType_ORDER_TYPE_LIMIT,
 				Price:     "100",
 				Quantity:  tt.quantity,
 			})

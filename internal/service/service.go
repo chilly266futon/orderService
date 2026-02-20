@@ -10,16 +10,16 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	orderv1 "github.com/chilly266futon/orderService/gen/pb"
+	orderpb "github.com/chilly266futon/exchange-service-contracts/gen/pb/order"
+	spotpb "github.com/chilly266futon/exchange-service-contracts/gen/pb/spot"
 	"github.com/chilly266futon/orderService/internal/clients"
 	"github.com/chilly266futon/orderService/internal/domain"
 	"github.com/chilly266futon/orderService/internal/storage"
-	spotv1 "github.com/chilly266futon/spotService/gen/pb"
 	"github.com/chilly266futon/spotService/pkg/shared/interceptors"
 )
 
 type Service struct {
-	orderv1.UnimplementedOrderServiceServer
+	orderpb.UnimplementedOrderServiceServer
 	storage    *storage.OrderStorage
 	spotClient clients.SpotClient
 	logger     *zap.Logger
@@ -33,7 +33,7 @@ func NewService(storage *storage.OrderStorage, spotClient clients.SpotClient, lo
 	}
 }
 
-func (s *Service) CreateOrder(ctx context.Context, req *orderv1.CreateOrderRequest) (*orderv1.CreateOrderResponse, error) {
+func (s *Service) CreateOrder(ctx context.Context, req *orderpb.CreateOrderRequest) (*orderpb.CreateOrderResponse, error) {
 	traceID := interceptors.GetTraceID(ctx)
 
 	price, quantity, err := s.validateAndParseCreateOrderRequest(req)
@@ -41,7 +41,7 @@ func (s *Service) CreateOrder(ctx context.Context, req *orderv1.CreateOrderReque
 		return nil, err
 	}
 
-	userRoles := []spotv1.UserRole{spotv1.UserRole_USER_ROLE_COMMON}
+	userRoles := []spotpb.UserRole{spotpb.UserRole_USER_ROLE_COMMON}
 
 	exists, err := s.spotClient.MarketExists(ctx, req.MarketId, userRoles)
 	if err != nil {
@@ -68,7 +68,7 @@ func (s *Service) CreateOrder(ctx context.Context, req *orderv1.CreateOrderReque
 		UserID:    req.UserId,
 		MarketID:  req.MarketId,
 		Type:      req.OrderType,
-		Status:    orderv1.OrderStatus_ORDER_STATUS_CREATED,
+		Status:    orderpb.OrderStatus_ORDER_STATUS_CREATED,
 		Price:     price,
 		Quantity:  quantity,
 		CreatedAt: time.Now(),
@@ -83,13 +83,13 @@ func (s *Service) CreateOrder(ctx context.Context, req *orderv1.CreateOrderReque
 		zap.String("market_id", order.MarketID),
 	)
 
-	return &orderv1.CreateOrderResponse{
+	return &orderpb.CreateOrderResponse{
 		OrderId: order.ID,
 		Status:  order.Status,
 	}, nil
 }
 
-func (s *Service) GetOrderStatus(ctx context.Context, req *orderv1.GetOrderStatusRequest) (*orderv1.GetOrderStatusResponse, error) {
+func (s *Service) GetOrderStatus(ctx context.Context, req *orderpb.GetOrderStatusRequest) (*orderpb.GetOrderStatusResponse, error) {
 	traceID := interceptors.GetTraceID(ctx)
 
 	if req == nil {
@@ -121,13 +121,13 @@ func (s *Service) GetOrderStatus(ctx context.Context, req *orderv1.GetOrderStatu
 		return nil, status.Error(codes.PermissionDenied, "access denied")
 	}
 
-	return &orderv1.GetOrderStatusResponse{
+	return &orderpb.GetOrderStatusResponse{
 		OrderId: order.ID,
 		Status:  order.Status,
 	}, nil
 }
 
-func (s *Service) validateAndParseCreateOrderRequest(req *orderv1.CreateOrderRequest) (decimal.Decimal, decimal.Decimal, error) {
+func (s *Service) validateAndParseCreateOrderRequest(req *orderpb.CreateOrderRequest) (decimal.Decimal, decimal.Decimal, error) {
 	if req == nil {
 		return decimal.Zero, decimal.Zero, status.Error(codes.InvalidArgument, "request is required")
 	}
@@ -137,7 +137,7 @@ func (s *Service) validateAndParseCreateOrderRequest(req *orderv1.CreateOrderReq
 	if req.MarketId == "" {
 		return decimal.Zero, decimal.Zero, status.Error(codes.InvalidArgument, "market_id is required")
 	}
-	if req.OrderType == orderv1.OrderType_ORDER_TYPE_UNSPECIFIED {
+	if req.OrderType == orderpb.OrderType_ORDER_TYPE_UNSPECIFIED {
 		return decimal.Zero, decimal.Zero, status.Error(codes.InvalidArgument, "order_type is required")
 	}
 	if req.Price == "" {

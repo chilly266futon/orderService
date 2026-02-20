@@ -5,15 +5,15 @@ import (
 
 	"github.com/shopspring/decimal"
 
-	orderv1 "github.com/chilly266futon/orderService/gen/pb"
+	orderpb "github.com/chilly266futon/exchange-service-contracts/gen/pb/order"
 )
 
 type Order struct {
 	ID        string
 	UserID    string
 	MarketID  string
-	Type      orderv1.OrderType
-	Status    orderv1.OrderStatus
+	Type      orderpb.OrderType
+	Status    orderpb.OrderStatus
 	Price     decimal.Decimal
 	Quantity  decimal.Decimal
 	CreatedAt time.Time
@@ -24,6 +24,6 @@ func (o *Order) IsOwnedBy(userID string) bool {
 }
 
 func (o *Order) CanBeCancelled() bool {
-	return o.Status == orderv1.OrderStatus_ORDER_STATUS_CANCELLED ||
-		o.Status == orderv1.OrderStatus_ORDER_STATUS_OPEN
+	return o.Status == orderpb.OrderStatus_ORDER_STATUS_CANCELLED ||
+		o.Status == orderpb.OrderStatus_ORDER_STATUS_OPEN
 }

@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	orderv1 "github.com/chilly266futon/orderService/gen/pb"
+	orderpb "github.com/chilly266futon/exchange-service-contracts/gen/pb/order"
 	"github.com/chilly266futon/orderService/internal/clients"
 	"github.com/chilly266futon/orderService/internal/config"
 	"github.com/chilly266futon/orderService/internal/service"
@@ -108,7 +108,7 @@ func main() {
 		log.Fatalf("failed to create server: %v", err)
 	}
 
-	orderv1.RegisterOrderServiceServer(grpcServer.GRPCServer(), orderService)
+	orderpb.RegisterOrderServiceServer(grpcServer.GRPCServer(), orderService)
 
 	// health check
 	if cfg.Health.Enabled {
