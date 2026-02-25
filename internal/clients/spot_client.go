@@ -8,8 +8,8 @@ import (
 	"go.uber.org/zap"
 
 	spotpb "github.com/chilly266futon/exchange-service-contracts/gen/pb/spot"
-	"github.com/chilly266futon/spotService/pkg/shared/breaker"
-	"github.com/chilly266futon/spotService/pkg/shared/interceptors"
+	"github.com/chilly266futon/exchange-shared/pkg/breaker"
+	"github.com/chilly266futon/exchange-shared/pkg/interceptors"
 	"github.com/chilly266futon/spotService/pkg/spotclient"
 )
 

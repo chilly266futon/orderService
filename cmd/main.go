@@ -1,25 +1,34 @@
 package main
 
 import (
+	"context"
 	"flag"
+	"fmt"
 	"log"
 
+	"buf.build/go/protovalidate"
 	"go.uber.org/zap"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	orderpb "github.com/chilly266futon/exchange-service-contracts/gen/pb/order"
+
+	"github.com/chilly266futon/exchange-shared/pkg/breaker"
+	"github.com/chilly266futon/exchange-shared/pkg/grpcutil"
+	"github.com/chilly266futon/exchange-shared/pkg/health"
+	"github.com/chilly266futon/exchange-shared/pkg/interceptors"
+	"github.com/chilly266futon/exchange-shared/pkg/logger"
+
 	"github.com/chilly266futon/orderService/internal/clients"
 	"github.com/chilly266futon/orderService/internal/config"
 	"github.com/chilly266futon/orderService/internal/service"
 	"github.com/chilly266futon/orderService/internal/storage"
-	"github.com/chilly266futon/spotService/pkg/shared/breaker"
-	"github.com/chilly266futon/spotService/pkg/shared/grpcutil"
-	"github.com/chilly266futon/spotService/pkg/shared/health"
-	"github.com/chilly266futon/spotService/pkg/shared/interceptors"
-	"github.com/chilly266futon/spotService/pkg/shared/logger"
+	transport "github.com/chilly266futon/orderService/internal/transport/grpc"
 )
 
 const serviceName = "order-service"
@@ -65,9 +74,36 @@ func main() {
 
 	orderStorage := storage.NewOrderStorage()
 
-	orderService := service.NewService(orderStorage, spotClient, l)
+	useCase := service.NewOrderUseCase(orderStorage, spotClient, l)
+
+	validator, err := protovalidate.New()
+	if err != nil {
+		l.Fatal("failed to initialize protovalidate", zap.Error(err))
+	}
 
 	var interceptorChain []grpc.ServerOption
+
+	interceptorChain = append(interceptorChain,
+		grpc.ChainUnaryInterceptor(
+			func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+				msg, ok := req.(proto.Message)
+				if !ok {
+					// на всякий случай, хотя в gRPC unary RPC все запросы всегда proto.Message
+					l.Warn("request is not a proto message", zap.String("type", fmt.Sprintf("%T", req)))
+					return handler(ctx, req)
+				}
+
+				if err := validator.Validate(msg); err != nil {
+					l.Warn("request validation failed",
+						zap.String("method", info.FullMethod),
+						zap.Error(err),
+					)
+					return nil, status.Errorf(codes.InvalidArgument, "invalid request: %v", err)
+				}
+				return handler(ctx, req)
+			},
+		),
+	)
 
 	interceptorChain = append(interceptorChain,
 		grpc.ChainUnaryInterceptor(interceptors.TraceIDInterceptor()),
@@ -108,7 +144,7 @@ func main() {
 		log.Fatalf("failed to create server: %v", err)
 	}
 
-	orderpb.RegisterOrderServiceServer(grpcServer.GRPCServer(), orderService)
+	orderpb.RegisterOrderServiceServer(grpcServer.GRPCServer(), transport.NewOrderServer(useCase))
 
 	// health check
 	if cfg.Health.Enabled {

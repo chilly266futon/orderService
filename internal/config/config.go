@@ -4,7 +4,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/chilly266futon/spotService/pkg/shared/logger"
+	"github.com/chilly266futon/exchange-shared/pkg/logger"
 
 	"gopkg.in/yaml.v3"
 )
@@ -43,6 +43,7 @@ type RateLimitConfig struct {
 	RequestsPerSecond float64                          `yaml:"requests_per_second"`
 	Burst             int                              `yaml:"burst"`
 	Methods           map[string]MethodRateLimitConfig `yaml:"methods"`
+	PerUser           PerUserLimit                     `yaml:"per_user"`
 }
 
 type HealthConfig struct {
@@ -53,6 +54,11 @@ type HealthConfig struct {
 type MethodRateLimitConfig struct {
 	RequestsPerSecond float64 `yaml:"requests_per_second"`
 	Burst             int     `yaml:"burst"`
+}
+
+type PerUserLimit struct {
+	OrdersPerMinute int `yaml:"orders_per_minute"`
+	Burst           int `yaml:"burst"`
 }
 
 func Load(path string) (*Config, error) {

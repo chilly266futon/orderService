@@ -23,6 +23,9 @@ rate_limit:
     GetOrderStatus:
       requests_per_second: 50.0
       burst: 100
+  per_user:
+    orders_per_minute: 100
+    burst: 10
 
 health:
   enabled: true
