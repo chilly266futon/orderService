@@ -1,0 +1,95 @@
+# order-service configuration
+# Скопируйте в configs/config.yaml и заполните реальными значениями
+
+server:
+  host: "0.0.0.0"
+  port: 50051
+  metrics_port: 9091
+  shutdown_timeout: 10s
+  health_enabled: true
+  health_check_timeout: 2s   # таймаут health check
+
+database:
+  dsn: "postgres://user:password@order-postgres:5432/order?sslmode=disable"
+  max_conns: 20
+  min_conns: 2
+  max_conn_lifetime: 30m
+  max_conn_idle_time: 5m
+  health_check_period: 1m
+  retry_timeout: 30s
+  retry_interval: 2s
+  max_retries: 15
+
+redis:
+  addr: "redis:6379"
+  password: ""
+  db: 1
+  retry_timeout: 30s      # максимальное время попыток переподключения
+  retry_interval: 2s      # интервал между попытками
+  max_retries: 10
+  min_retry_backoff: 100ms
+  max_retry_backoff: 2s
+
+jwt:
+  secret: "change-me-to-a-long-random-string"
+
+spot_client:
+  addr: "spot-service:50052"
+  timeout: 5s
+  tls_enabled: false          # включить TLS для соединения с spot-service
+  ca_file: "certs/ca.crt"     # путь к корневому сертификату (опционально, если tls_enabled=true)
+
+circuit_breaker:
+  enabled: true
+  max_requests: 3         # запросов в half-open
+  interval: 10s           # интервал сброса счётчиков в closed
+  timeout: 30s            # время в open перед переходом в half-open
+  attempts: 3             # количество retry-попыток
+  retry_delay: 100ms      # задержка между retry
+  min_requests: 10        # мин. запросов для оценки failure_ratio
+  failure_ratio: 0.6      # порог ошибок для открытия
+  max_failures: 5         # макс. ошибок подряд для открытия
+
+grpc_backoff:
+  enabled: true
+  base_delay: 200ms
+  multiplier: 2.0
+  max_delay: 15s
+  max_attempts: 5
+
+order_limits:
+  default: 5              # лимит если роль не найдена в списке
+  max_active_orders:
+    COMMON: 5             # обычный пользователь
+    VERIFIED: 20          # верифицированный
+    PREMIUM: 100          # премиум
+    ADMIN: 1000           # администратор
+
+rate_limit:
+  global:
+    rps: 1000               # общий лимит на весь сервис
+    burst: 2000
+  per_method:
+    CreateOrder:
+      rps: 200              # создание ордера — основная write-нагрузка
+      burst: 400
+    GetOrderStatus:
+      rps: 500              # чтение статуса — лёгкая read-операция
+      burst: 1000
+    ListOrders:
+      rps: 300              # список ордеров — средняя read-операция
+      burst: 600
+    CancelOrder:
+      rps: 100              # отмена ордера — нечастая операция
+      burst: 200
+  per_user:
+    rps: 20                 # ~20 запросов/с на пользователя
+    burst: 40
+    max_inactive_age: 10m   # очистка лимитера неактивного пользователя
+
+# Таймауты по операциям (gRPC методы)
+operation_timeouts:
+  "/order.v1.OrderService/CreateOrder": 10s
+  "/order.v1.OrderService/GetOrderStatus": 5s
+  "/order.v1.OrderService/ListOrders": 5s
+  "/order.v1.OrderService/CancelOrder": 5s

@@ -1,84 +1,98 @@
 package config
 
 import (
-	"os"
+	"strings"
 	"time"
 
-	"github.com/chilly266futon/exchange-shared/pkg/logger"
-
-	"gopkg.in/yaml.v3"
+	"github.com/chilly266futon/exchange-shared/pkg/config"
+	"github.com/spf13/viper"
+	"go.uber.org/zap"
 )
 
 type Config struct {
-	Server      ServerConfig      `yaml:"server"`
-	SpotService SpotServiceConfig `yaml:"spot_service"`
-	RateLimit   RateLimitConfig   `yaml:"rate_limit"`
-	Health      HealthConfig      `yaml:"health"`
-	Logger      logger.Config     `yaml:"logger"`
+	config.BaseConfig
+	SpotClient  SpotClient  `mapstructure:"spot_client"`
+	OrderLimits OrderLimits `mapstructure:"order_limits"`
 }
 
-type ServerConfig struct {
-	Host            string        `yaml:"host"`
-	Port            int           `yaml:"port"`
-	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
+type SpotClient struct {
+	Addr       string        `mapstructure:"addr"`
+	Timeout    time.Duration `mapstructure:"timeout"`
+	TLSEnabled bool          `mapstructure:"tls_enabled"`
+	CAFile     string        `mapstructure:"ca_file"`
 }
 
-type SpotServiceConfig struct {
-	Addr          string        `yaml:"addr"`
-	Timeout       time.Duration `yaml:"timeout"`
-	EnableBreaker bool          `yaml:"enable_breaker"`
-	Breaker       BreakerConfig `yaml:"breaker"`
+// OrderLimits — максимальное количество активных ордеров по роли.
+// Ключ — имя роли (COMMON, VERIFIED, PREMIUM, ADMIN).
+type OrderLimits struct {
+	MaxActiveOrders map[string]int `mapstructure:"max_active_orders"`
+	Default         int            `mapstructure:"default"`
 }
 
-type BreakerConfig struct {
-	MaxRequests uint32        `yaml:"max_requests"`
-	Interval    time.Duration `yaml:"interval"`
-	Timeout     time.Duration `yaml:"timeout"`
-	Attempts    uint32        `yaml:"attempts"`
-}
+func Load(path string, l *zap.Logger) *Config {
+	base := config.LoadBase(path, "ORDER", l)
 
-// RateLimitConfig конфигурация rate limiting
-type RateLimitConfig struct {
-	Enabled           bool                             `yaml:"enabled"`
-	RequestsPerSecond float64                          `yaml:"requests_per_second"`
-	Burst             int                              `yaml:"burst"`
-	Methods           map[string]MethodRateLimitConfig `yaml:"methods"`
-	PerUser           PerUserLimit                     `yaml:"per_user"`
-}
+	viper.SetConfigFile(path)
+	viper.SetEnvPrefix("ORDER")
+	viper.AutomaticEnv()
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
-type HealthConfig struct {
-	Enabled bool `mapstructure:"enabled"`
-}
-
-// MethodRateLimitConfig лимит для конкретного метода
-type MethodRateLimitConfig struct {
-	RequestsPerSecond float64 `yaml:"requests_per_second"`
-	Burst             int     `yaml:"burst"`
-}
-
-type PerUserLimit struct {
-	OrdersPerMinute int `yaml:"orders_per_minute"`
-	Burst           int `yaml:"burst"`
-}
-
-func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+	if err := viper.ReadInConfig(); err != nil {
+		l.Fatal("failed to read config", zap.Error(err))
 	}
 
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, err
+	cfg := Config{
+		BaseConfig: *base,
 	}
-	return &cfg, nil
-}
 
-// MustLoad загружает конфигурацию или паникует
-func MustLoad(configPath string) *Config {
-	cfg, err := Load(configPath)
-	if err != nil {
-		panic(err)
+	// Unmarshal только order-специфичных секций
+	if sub := viper.Sub("spot_client"); sub != nil {
+		if err := sub.Unmarshal(&cfg.SpotClient); err != nil {
+			l.Fatal("failed to unmarshal spot_client", zap.Error(err))
+		}
 	}
-	return cfg
+	if sub := viper.Sub("order_limits"); sub != nil {
+		if err := sub.Unmarshal(&cfg.OrderLimits); err != nil {
+			l.Fatal("failed to unmarshal order_limits", zap.Error(err))
+		}
+	}
+
+	// env overrides
+	if v := viper.GetString("spot_client.addr"); v != "" {
+		cfg.SpotClient.Addr = v
+	}
+	if viper.IsSet("spot_client.tls_enabled") {
+		cfg.SpotClient.TLSEnabled = viper.GetBool("spot_client.tls_enabled")
+	}
+	if v := viper.GetString("spot_client.ca_file"); v != "" {
+		cfg.SpotClient.CAFile = v
+	}
+
+	// defaults
+	if cfg.SpotClient.Addr == "" {
+		cfg.SpotClient.Addr = "localhost:50052"
+	}
+	if cfg.SpotClient.Timeout == 0 {
+		cfg.SpotClient.Timeout = 10 * time.Second
+	}
+	if !cfg.SpotClient.TLSEnabled {
+		cfg.SpotClient.TLSEnabled = true // по умолчанию включен TLS
+	}
+	if cfg.SpotClient.CAFile == "" {
+		cfg.SpotClient.CAFile = "certs/ca.crt"
+	}
+
+	if cfg.OrderLimits.Default == 0 {
+		cfg.OrderLimits.Default = 5
+	}
+	if cfg.OrderLimits.MaxActiveOrders == nil {
+		cfg.OrderLimits.MaxActiveOrders = map[string]int{
+			"COMMON":   5,
+			"VERIFIED": 20,
+			"PREMIUM":  100,
+			"ADMIN":    1000,
+		}
+	}
+
+	return &cfg
 }

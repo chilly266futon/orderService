@@ -3,7 +3,7 @@ package domain
 type OrderStatus uint8
 
 const (
-	OrderStatusUnspecified = iota
+	OrderStatusUnspecified OrderStatus = iota
 	OrderStatusCreated
 	OrderStatusOpen
 	OrderStatusFilled

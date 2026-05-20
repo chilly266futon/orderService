@@ -1,36 +1,62 @@
 server:
   host: "0.0.0.0"
   port: 50051
+  metrics_port: 9091
   shutdown_timeout: 10s
+  health_enabled: true
 
-spot_service:
+database:
+  dsn: "postgres://user:pass@order-postgres:5432/order?sslmode=disable"
+
+redis:
+  addr: redis:6379
+  password: ""
+  db: 1
+
+jwt:
+  secret: "my-very-long-secret-key"
+
+spot_client:
   addr: "spot-service:50052"
   timeout: 5s
-  enable_breaker: true
-  breaker:
-    max_requests: 3
-    interval: 10s
-    timeout: 30s
+
+circuit_breaker:
+  enabled: true
+  max_requests: 3
+  interval: 10s
+  timeout: 30s
+  attempts: 3
+  retry_delay: 100ms
+  min_requests: 10
+  failure_ratio: 0.6
+  max_failures: 5
+
+order_limits:
+  default: 5
+  max_active_orders:
+    COMMON: 5
+    VERIFIED: 20
+    PREMIUM: 100
+    ADMIN: 1000
 
 rate_limit:
-  enabled: true
-  requests_per_second: 10
-  burst: 20
-  methods:
+  global:
+    rps: 1000
+    burst: 2000
+  per_method:
     CreateOrder:
-      requests_per_second: 10.0
-      burst: 20
+      rps: 200
+      burst: 400
     GetOrderStatus:
-      requests_per_second: 50.0
-      burst: 100
+      rps: 500
+      burst: 1000
+    ListOrders:
+      rps: 300
+      burst: 600
+    CancelOrder:
+      rps: 100
+      burst: 200
   per_user:
-    orders_per_minute: 100
-    burst: 10
-
-health:
-  enabled: true
-
-logger:
-  level: "info"
-  development: false
-  encoding: "json"
+    rps: 20
+    burst: 40
+    max_inactive_age: 10m

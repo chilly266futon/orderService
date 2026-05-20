@@ -2,162 +2,227 @@ package main
 
 import (
 	"context"
-	"flag"
-	"fmt"
-	"log"
+	"time"
 
 	"buf.build/go/protovalidate"
+	"github.com/chilly266futon/exchange-shared/pkg/infra"
+	"github.com/chilly266futon/orderService/internal/cache"
 	"go.uber.org/zap"
-	"golang.org/x/time/rate"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 
-	orderpb "github.com/chilly266futon/exchange-service-contracts/gen/pb/order"
+	orderv1 "github.com/chilly266futon/exchange-service-contracts/gen/pb/order"
 
-	"github.com/chilly266futon/exchange-shared/pkg/breaker"
+	"github.com/chilly266futon/exchange-shared/pkg/auth"
+	conf "github.com/chilly266futon/exchange-shared/pkg/config"
 	"github.com/chilly266futon/exchange-shared/pkg/grpcutil"
 	"github.com/chilly266futon/exchange-shared/pkg/health"
 	"github.com/chilly266futon/exchange-shared/pkg/interceptors"
 	"github.com/chilly266futon/exchange-shared/pkg/logger"
+	"github.com/chilly266futon/exchange-shared/pkg/postgres"
+	"github.com/chilly266futon/exchange-shared/pkg/telemetry"
 
 	"github.com/chilly266futon/orderService/internal/clients"
 	"github.com/chilly266futon/orderService/internal/config"
 	"github.com/chilly266futon/orderService/internal/service"
 	"github.com/chilly266futon/orderService/internal/storage"
 	transport "github.com/chilly266futon/orderService/internal/transport/grpc"
+	ordermigrations "github.com/chilly266futon/orderService/migrations"
 )
 
 const serviceName = "order-service"
 
 func main() {
-	// Парсинг флагов
-	configPath := flag.String("config", "configs/config.yaml", "Path to config file")
-	flag.Parse()
-
-	cfg := config.MustLoad(*configPath)
-
-	l, err := logger.New(cfg.Logger)
-	if err != nil {
-		log.Fatalf("failed to create logger: %v", err)
-	}
-	defer l.Sync()
-
-	l.Info("starting order-service",
-		zap.String("version", "1.0.0"),
-		zap.String("config", *configPath),
-	)
-
-	spotClient, err := clients.NewSpotClient(clients.Config{
-		Address:       cfg.SpotService.Addr,
-		Timeout:       cfg.SpotService.Timeout,
-		EnableBreaker: cfg.SpotService.EnableBreaker,
-		BreakerConfig: breaker.Config{
-			MaxRequests: cfg.SpotService.Breaker.MaxRequests,
-			Interval:    cfg.SpotService.Breaker.Interval,
-			Timeout:     cfg.SpotService.Breaker.Timeout,
-			Attempts:    cfg.SpotService.Breaker.Attempts,
-		},
-	}, l)
-	if err != nil {
-		log.Fatalf("failed to create spot client: %v", err)
-	}
-	defer spotClient.Close()
-
-	l.Info("connected to spot service",
-		zap.String("address", cfg.SpotService.Addr),
-		zap.Bool("circuit_creaker", cfg.SpotService.EnableBreaker),
-	)
-
-	orderStorage := storage.NewOrderStorage()
-
-	useCase := service.NewOrderUseCase(orderStorage, spotClient, l)
-
-	validator, err := protovalidate.New()
-	if err != nil {
-		l.Fatal("failed to initialize protovalidate", zap.Error(err))
-	}
-
-	var interceptorChain []grpc.ServerOption
-
-	interceptorChain = append(interceptorChain,
-		grpc.ChainUnaryInterceptor(
-			func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-				msg, ok := req.(proto.Message)
-				if !ok {
-					// на всякий случай, хотя в gRPC unary RPC все запросы всегда proto.Message
-					l.Warn("request is not a proto message", zap.String("type", fmt.Sprintf("%T", req)))
-					return handler(ctx, req)
-				}
-
-				if err := validator.Validate(msg); err != nil {
-					l.Warn("request validation failed",
-						zap.String("method", info.FullMethod),
-						zap.Error(err),
-					)
-					return nil, status.Errorf(codes.InvalidArgument, "invalid request: %v", err)
-				}
-				return handler(ctx, req)
-			},
-		),
-	)
-
-	interceptorChain = append(interceptorChain,
-		grpc.ChainUnaryInterceptor(interceptors.TraceIDInterceptor()),
-	)
-
-	interceptorChain = append(interceptorChain,
-		grpc.UnaryInterceptor(interceptors.UnaryPanicRecoveryInterceptor(l)),
-	)
-
-	if cfg.RateLimit.Enabled {
-		rateLimiter := interceptors.NewMethodRateLimiterInterceptor(
-			rate.Limit(cfg.RateLimit.RequestsPerSecond),
-			cfg.RateLimit.Burst,
-		)
-
-		for method, limit := range cfg.RateLimit.Methods {
-			rateLimiter.SetMethodLimit(method, rate.Limit(limit.RequestsPerSecond), limit.Burst)
+	l := logger.New()
+	defer func() {
+		if err := l.Sync(); err != nil {
+			l.Fatal("failed to sync logger", zap.Error(err))
 		}
+	}()
 
-		interceptorChain = append(interceptorChain,
-			grpc.ChainUnaryInterceptor(rateLimiter.Interceptor()))
+	cfg := config.Load("config.yaml", l)
 
-		l.Info("rate limiting enabled")
+	l.Info("starting order-service", zap.Int("port", cfg.Server.Port))
+
+	// Telemetry (трассировка + Prometheus метрики)
+	shutdownTelemetry, metricsHandler, err := telemetry.Setup(serviceName, l)
+	if err != nil {
+		l.Fatal("failed to setup telemetry", zap.Error(err))
+	}
+	defer shutdownTelemetry()
+
+	// Кастомные метрики
+	m, err := infra.InitMetrics(serviceName)
+	if err != nil {
+		l.Fatal("failed to create metrics", zap.Error(err))
 	}
 
-	interceptorChain = append(interceptorChain,
-		grpc.ChainUnaryInterceptor(interceptors.LoggerInterceptor(l)),
+	// Postgres
+	dbPool, err := infra.InitPostgres(cfg.Database, l)
+	if err != nil {
+		l.Fatal("failed to connect to postgres", zap.Error(err))
+	}
+	defer dbPool.Close()
+
+	if err := postgres.RunMigrations(dbPool, ordermigrations.FS, "."); err != nil {
+		l.Fatal("migrations failed", zap.Error(err))
+	}
+
+	orderStorage := storage.NewOrderStorage(dbPool)
+
+	// Redis
+	redisClient := infra.InitRedis(cfg.Redis, l)
+	defer func() {
+		if err := redisClient.Close(); err != nil {
+			l.Error("failed to close redis client", zap.Error(err))
+		}
+	}()
+
+	marketAccessCache := cache.NewMarketAccessCache(
+		cache.NewRedisCache(redisClient, l),
+		l,
+		30*time.Second, // TTL для кэша доступа к рынкам
 	)
+
+	invalidator := cache.NewInvalidator(redisClient, l)
+	go invalidator.Start(context.Background())
+
+	spotClient, err := clients.NewSpotClient(
+		cfg.SpotClient,
+		conf.CircuitBreaker{
+			MaxRequests:  cfg.CircuitBreaker.MaxRequests,
+			Interval:     cfg.CircuitBreaker.Interval,
+			Timeout:      cfg.CircuitBreaker.Timeout,
+			Attempts:     cfg.CircuitBreaker.Attempts,
+			RetryDelay:   100 * time.Millisecond,
+			MinRequests:  10,
+			FailureRatio: 0.6,
+		}, m, l,
+	)
+	if err != nil {
+		l.Fatal("failed to create spot client", zap.Error(err))
+	}
+	defer func() {
+		if err := spotClient.Close(); err != nil {
+			l.Error("failed to close spot client", zap.Error(err))
+		}
+	}()
+
+	l.Info("connected to spot service", zap.String("address", cfg.SpotClient.Addr))
+
+	useCase := service.NewOrderUseCase(
+		orderStorage,
+		spotClient,
+		marketAccessCache,
+		cfg.OrderLimits,
+		m,
+		l,
+		nil, // activeOrdersCache
+	)
+
+	jwtValidator := auth.NewJWTValidator(cfg.JWT.Secret, l)
+	validatorInstance, err := protovalidate.New()
+	if err != nil {
+		l.Fatal("failed to initialize validator", zap.Error(err))
+	}
+
+	interceptorsChain, rateLimiter := interceptors.NewInterceptorChain(
+		l,
+		m,
+		cfg.RateLimit,
+		cfg.Logger,
+		jwtValidator,
+		validatorInstance,
+		[]string{"/order.v1.OrderService/CreateOrder", "/order.v1.OrderService/ListOrders"},
+		cfg.OperationTimeouts,
+	)
+	defer rateLimiter.Stop() // Корректно завершаем клинап пользователей
 
 	grpcServer, err := grpcutil.NewServer(
 		grpcutil.ServerConfig{
 			Host:            cfg.Server.Host,
 			Port:            cfg.Server.Port,
 			ShutdownTimeout: cfg.Server.ShutdownTimeout,
-		}, l, interceptorChain...,
+		}, l, interceptorsChain...,
 	)
 	if err != nil {
-		log.Fatalf("failed to create server: %v", err)
+		l.Fatal("failed to create server", zap.Error(err))
 	}
 
-	orderpb.RegisterOrderServiceServer(grpcServer.GRPCServer(), transport.NewOrderServer(useCase))
+	orderv1.RegisterOrderServiceServer(grpcServer.GRPCServer(), transport.NewOrderServer(useCase))
 
 	// health check
-	if cfg.Health.Enabled {
+	if cfg.Server.HealthEnabled {
 		healthServer := health.NewServer()
+
+		// Проверка Postgres с тайм-аутом
+		healthTimeout := cfg.Server.HealthCheckTimeout
+		if healthTimeout == 0 {
+			healthTimeout = 2 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), healthTimeout)
+		defer cancel()
+		if err := health.CheckPostgresHealth(ctx, orderStorage.DB()); err == nil {
+			healthServer.SetHealthy("postgres")
+		} else {
+			l.Warn("postgres health check failed", zap.Error(err))
+		}
+
+		// Проверка Redis с тайм-аутом
+		ctx, cancel = context.WithTimeout(context.Background(), healthTimeout)
+		defer cancel()
+		if err := health.CheckRedisHealth(ctx, redisClient); err == nil {
+			healthServer.SetHealthy("redis")
+		} else {
+			l.Warn("redis health check failed", zap.Error(err))
+		}
+
 		healthServer.SetHealthy("order_v1.OrderService")
 		grpc_health_v1.RegisterHealthServer(grpcServer.GRPCServer(), healthServer)
 		l.Info("health check enabled")
+
+		// Периодическая проверка состояния
+		healthCheckCtx, healthCheckCancel := context.WithCancel(context.Background())
+		defer healthCheckCancel()
+		go func(ctx context.Context) {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					checkCtx, cancel := context.WithTimeout(ctx, healthTimeout)
+					if err := health.CheckPostgresHealth(checkCtx, orderStorage.DB()); err == nil {
+						healthServer.SetHealthy("postgres")
+					} else {
+						healthServer.SetUnhealthy("postgres")
+						l.Warn("postgres health check failed", zap.Error(err))
+					}
+					cancel()
+
+					checkCtx, cancel = context.WithTimeout(ctx, healthTimeout)
+					if err := health.CheckRedisHealth(checkCtx, redisClient); err == nil {
+						healthServer.SetHealthy("redis")
+					} else {
+						healthServer.SetUnhealthy("redis")
+						l.Warn("redis health check failed", zap.Error(err))
+					}
+					cancel()
+				}
+			}
+		}(healthCheckCtx)
 	}
 
 	reflection.Register(grpcServer.GRPCServer())
 
+	// HTTP сервер для /metrics (Prometheus)
+	metricsCtx, metricsCancel := context.WithCancel(context.Background())
+	defer metricsCancel()
+	grpcServer.StartMetricsServer(metricsCtx, cfg.Server.MetricsPort, metricsHandler)
+
 	l.Info("server ready to accept connections")
 	if err := grpcServer.Start(); err != nil {
-		log.Fatalf("server error: %v", err)
+		l.Fatal("server error", zap.Error(err))
 	}
 }

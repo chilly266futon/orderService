@@ -4,28 +4,35 @@ import (
 	"context"
 	"errors"
 
+	"github.com/shopspring/decimal"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	pb "github.com/chilly266futon/exchange-service-contracts/gen/pb/order"
+	"github.com/chilly266futon/exchange-shared/pkg/common"
 	"github.com/chilly266futon/orderService/internal/domain"
 	"github.com/chilly266futon/orderService/internal/dto/order"
 	"github.com/chilly266futon/orderService/internal/mappers"
 	"github.com/chilly266futon/orderService/internal/service"
-	"github.com/shopspring/decimal"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type OrderServer struct {
 	pb.UnimplementedOrderServiceServer
-	useCase *service.OrderUseCase
+	useCase service.OrderService
 }
 
-func NewOrderServer(useCase *service.OrderUseCase) *OrderServer {
+func NewOrderServer(useCase service.OrderService) *OrderServer {
 	return &OrderServer{useCase: useCase}
 }
 
 func (s *OrderServer) CreateOrder(ctx context.Context, pbReq *pb.CreateOrderRequest) (*pb.CreateOrderResponse, error) {
+	userID := common.GetUserID(ctx)
+	if userID == "" {
+		return nil, status.Errorf(codes.Unauthenticated, "user_id not found in context")
+	}
+
 	dtoReq := order.CreateOrderRequest{
-		UserID:   pbReq.UserId,
+		UserID:   userID, // user_id только из JWT
 		MarketID: pbReq.MarketId,
 	}
 
@@ -41,22 +48,22 @@ func (s *OrderServer) CreateOrder(ctx context.Context, pbReq *pb.CreateOrderRequ
 	}
 	dtoReq.Quantity = quantity
 
-	dtoReq.OrderType = mappers.OrderTypeFromProto(pbReq.OrderType).String()
+	dtoReq.OrderType = mappers.OrderTypeFromProto(pbReq.OrderType)
 
 	dtoResp, err := s.useCase.CreateOrder(ctx, dtoReq)
 	if err != nil {
-		if errors.Is(err, domain.ErrInvalidPrice) || errors.Is(err, domain.ErrInvalidQuantity) {
-			return nil, status.Error(codes.InvalidArgument, err.Error())
-		}
-		return nil, err
+		return nil, mapDomainError(err)
 	}
 
 	statusStr, err := domain.ParseOrderStatus(dtoResp.Status)
+	if err != nil {
+		return nil, mapDomainError(err)
+	}
 
 	return &pb.CreateOrderResponse{
 		OrderId: dtoResp.OrderID,
 		Status:  mappers.OrderStatusToProto(statusStr),
-	}, err
+	}, nil
 }
 
 func (s *OrderServer) GetOrderStatus(ctx context.Context, pbReq *pb.GetOrderStatusRequest) (*pb.GetOrderStatusResponse, error) {
@@ -67,7 +74,7 @@ func (s *OrderServer) GetOrderStatus(ctx context.Context, pbReq *pb.GetOrderStat
 
 	resp, err := s.useCase.GetOrderStatus(ctx, dtoReq)
 	if err != nil {
-		return nil, err
+		return nil, mapDomainError(err)
 	}
 
 	statusStr, err := domain.ParseOrderStatus(resp.Status)
@@ -87,14 +94,51 @@ func (s *OrderServer) CancelOrder(ctx context.Context, pbReq *pb.CancelOrderRequ
 
 	dtoResp, err := s.useCase.CancelOrder(ctx, dtoReq)
 	if err != nil {
-		return nil, err
+		return nil, mapDomainError(err)
 	}
 
 	statusStr, err := domain.ParseOrderStatus(dtoResp.Status)
+	if err != nil {
+		return nil, mapDomainError(err)
+	}
 
 	return &pb.CancelOrderResponse{
 		OrderId: dtoResp.OrderID,
 		Status:  mappers.OrderStatusToProto(statusStr),
 	}, nil
 
+}
+
+func mapDomainError(err error) error {
+	// Если уже gRPC status — пробрасываем как есть
+	if s, ok := status.FromError(err); ok && s.Code() != codes.Unknown {
+		return err
+	}
+
+	switch {
+	case errors.Is(err, domain.ErrInvalidPrice),
+		errors.Is(err, domain.ErrInvalidQuantity),
+		errors.Is(err, domain.ErrInvalidOrderType),
+		errors.Is(err, domain.ErrInvalidOrderStatus):
+		return status.Error(codes.InvalidArgument, err.Error())
+
+	case errors.Is(err, domain.ErrOrderNotFound):
+		return status.Error(codes.NotFound, err.Error())
+
+	case errors.Is(err, domain.ErrAccessDenied):
+		return status.Error(codes.PermissionDenied, err.Error())
+
+	case errors.Is(err, domain.ErrMarketNotAvailable):
+		return status.Error(codes.FailedPrecondition, err.Error())
+
+	case errors.Is(err, domain.ErrActiveOrderLimitExceeded):
+		return status.Error(codes.ResourceExhausted, err.Error())
+
+	case errors.Is(err, domain.ErrOrderCannotBeCancelled),
+		errors.Is(err, domain.ErrOrderAlreadyCancelled):
+		return status.Error(codes.FailedPrecondition, err.Error())
+
+	default:
+		return status.Error(codes.Internal, "internal error")
+	}
 }

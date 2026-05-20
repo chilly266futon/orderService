@@ -3,7 +3,7 @@ package domain
 type OrderType uint8
 
 const (
-	OrderTypeUnspecified = iota
+	OrderTypeUnspecified OrderType = iota
 	OrderTypeLimit
 	OrderTypeMarket
 	OrderTypeStopLimit

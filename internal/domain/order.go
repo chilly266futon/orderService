@@ -15,6 +15,7 @@ type Order struct {
 	Price     decimal.Decimal
 	Quantity  decimal.Decimal
 	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 func (o *Order) IsOwnedBy(userID string) bool {

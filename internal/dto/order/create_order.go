@@ -2,20 +2,14 @@ package order
 
 import (
 	"github.com/shopspring/decimal"
-)
 
-const (
-	OrderTypeUnspecified = "UNSPECIFIED"
-	OrderTypeLimit       = "LIMIT"
-	OrderTypeMarket      = "MARKET"
-	OrderTypeStopLimit   = "STOP_LIMIT"
-	OrderTypeStopMarket  = "STOP_MARKET"
+	"github.com/chilly266futon/orderService/internal/domain"
 )
 
 type CreateOrderRequest struct {
 	UserID    string
 	MarketID  string
-	OrderType string
+	OrderType domain.OrderType
 	Price     decimal.Decimal
 	Quantity  decimal.Decimal
 }
